@@ -30,7 +30,15 @@ WasmRelease parseRelease(Object? value, List<String> origins) {
   final r = WasmRelease.fromJson(value as Map<String, dynamic>);
   final ids = <String>{}, urls = <String>{};
   for (final a in r.assets) {
-    final u = Uri.parse(a.url);
+    // A schema-valid string can still fail to parse; surface the declared
+    // 'origin' code instead of letting a FormatException escape.
+    final Uri u;
+    try {
+      u = Uri.parse(a.url);
+    } on FormatException {
+      throw const LoaderException(
+          'origin', 'Asset URL is not a parseable absolute URL');
+    }
     if (u.scheme != 'https' ||
         u.userInfo.isNotEmpty ||
         u.hasQuery ||
