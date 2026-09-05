@@ -1,0 +1,6 @@
+schema = 2
+[tasks.deps]
+run = ["zed install --frozen --adapter none --install-mode copy", "flutter pub get --enforce-lockfile"]
+[tasks.check]
+run = ["zed validate --require-lock", "flutter analyze", "flutter test"]
+
