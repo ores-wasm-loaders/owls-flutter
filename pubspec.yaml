@@ -1,0 +1,19 @@
+name: owls_flutter
+version: 0.1.0
+description: Verified WASM preparation, native bytes and explicit WebView bridges.
+publish_to: none
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  owls_interfaces: 0.1.0
+  crypto: 3.0.7
+  json_schema: 5.2.2
+  webview_flutter: 4.13.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+dependency_overrides:
+  owls_interfaces:
+    path: zed_modules/ores-wasm-loaders/owls-interfaces/dart
