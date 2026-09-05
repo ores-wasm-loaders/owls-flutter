@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -47,7 +48,44 @@ class Adapter implements WasmAdapter<int> {
 
 LoaderPolicy policy({int maxPrepareBytes = 1000}) => LoaderPolicy(
     origins: ['https://assets.example'], maxPrepareBytes: maxPrepareBytes);
+
+class HangingAdapter implements WasmAdapter<int> {
+  int starts = 0;
+  @override
+  Future<int> activate(
+      WasmRelease release, ReadAsset bytes, Cancellation token) {
+    starts++;
+    return Completer<int>().future;
+  }
+}
+
 void main() {
+  test('activation timeout is terminal and does not replay partial startup',
+      () async {
+    final adapter = HangingAdapter();
+    final host = WasmHost(manifest(),
+        policy: LoaderPolicy(
+            origins: ['https://assets.example'],
+            timeout: const Duration(milliseconds: 10)),
+        transport: Fetch());
+    await expectLater(host.activate(adapter), throwsA(isA<LoaderException>()));
+    await expectLater(host.activate(adapter), throwsA(isA<LoaderException>()));
+    expect(adapter.starts, 1);
+  });
+  test(
+      'JSON integer-valued numbers and extension configuration survive parsing',
+      () {
+    final r = manifest()..['schemaVersion'] = 1.0;
+    r['assets'][0]['bytes'] = 8.0;
+    r['extensions'] = {
+      'tenant': {'mode': 'fast'}
+    };
+    final parsed = parseRelease(r, ['https://assets.example']);
+    expect(parsed.assets.first.bytes, 8);
+    expect((parsed.extensions['tenant'] as Map)['mode'], 'fast');
+    expect(() => (parsed.extensions['tenant'] as Map)['mode'] = 'slow',
+        throwsUnsupportedError);
+  });
   test('pinned schema is embedded byte-for-byte', () {
     expect(
         releaseSchemaJson,

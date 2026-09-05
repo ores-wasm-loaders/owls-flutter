@@ -161,7 +161,10 @@ class WasmHost {
         await bytes(a.id, own);
       }
     })()
-        .whenComplete(() {
+        .timeout(policy.timeout, onTimeout: () {
+      own.cancel();
+      throw const LoaderException('timeout', 'Preparation timed out');
+    }).whenComplete(() {
       timer.cancel();
       if (cancellation == null) _preparing = null;
     });
@@ -183,7 +186,11 @@ class WasmHost {
         await _preparing;
       } catch (_) {/* demand load retries */}
       return adapter.activate(release, (id) => bytes(id, token), token);
-    })();
+    })()
+        .timeout(policy.timeout, onTimeout: () {
+      token.cancel();
+      throw const LoaderException('timeout', 'Activation timed out');
+    });
     _active = future;
     return future;
   }

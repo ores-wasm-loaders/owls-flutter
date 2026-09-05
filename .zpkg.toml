@@ -1,18 +1,18 @@
 [package]
 org = "ores-wasm-loaders"
 name = "owls-flutter"
-version = "0.1.0"
+version = "0.1.1"
 description = "WASM asset preparation and runtime bridges for Flutter hosts"
 license = "MIT"
 [package.repository]
 vcs = "git"
 url = "https://github.com/ores-wasm-loaders/owls-flutter"
 [dependencies]
-"ores-wasm-loaders/owls-interfaces" = "=0.1.0"
+"ores-wasm-loaders/owls-interfaces" = "=0.1.1"
 [targets.repository]
 dir = "."
 [install]
 adapter = "none"
 [publish]
+include_readme = true
 exclude = [".ores/**", ".zed/**", ".zed-pack/**", "zed_modules/**", ".dart_tool/**", ".flutter-plugins-dependencies", "build/**"]
-

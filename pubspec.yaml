@@ -1,5 +1,5 @@
 name: owls_flutter
-version: 0.1.0
+version: 0.1.1
 description: Verified WASM preparation, native bytes and explicit WebView bridges.
 publish_to: none
 environment:
@@ -7,7 +7,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  owls_interfaces: 0.1.0
+  owls_interfaces: 0.1.1
   crypto: 3.0.7
   json_schema: 5.2.2
   webview_flutter: 4.13.0
