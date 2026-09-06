@@ -33,6 +33,8 @@ WasmRelease parseRelease(Object? value, List<String> origins) {
   final r = WasmRelease.fromJson(value as Map<String, dynamic>);
   final ids = <String>{}, urls = <String>{};
   for (final a in r.assets) {
+    // A schema-valid string can still fail to parse; keep that failure inside
+    // the declared LoaderException boundary.
     final u = Uri.tryParse(a.url);
     final canonicalUrl = u != null &&
         u.scheme == 'https' &&

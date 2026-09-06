@@ -243,4 +243,14 @@ void main() {
     expect(responseContentTypeAllowed(asset, 'text/html'), isFalse);
     expect(responseContentTypeAllowed(asset, null), isFalse);
   });
+  test(
+      'a schema-shaped but unparseable asset URL raises a declared LoaderException',
+      () {
+    final r = manifest();
+    r['assets'][0]['url'] = 'https://[/acme/engine.wasm';
+    expect(
+        () => WasmHost(r, policy: policy(), transport: Fetch()),
+        throwsA(
+            isA<LoaderException>().having((e) => e.code, 'code', 'origin')));
+  });
 }
