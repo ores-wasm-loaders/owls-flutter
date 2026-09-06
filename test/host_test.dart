@@ -36,6 +36,18 @@ class Fetch implements AssetTransport {
   }
 }
 
+class SlowFetch extends Fetch {
+  final started = Completer<void>();
+  final release = Completer<void>();
+  @override
+  Future<Uint8List> fetch(WasmAsset asset, Cancellation cancellation) async {
+    calls++;
+    if (!started.isCompleted) started.complete();
+    await release.future;
+    return value;
+  }
+}
+
 class Adapter implements WasmAdapter<int> {
   int starts = 0;
   @override
@@ -56,6 +68,29 @@ class HangingAdapter implements WasmAdapter<int> {
       WasmRelease release, ReadAsset bytes, Cancellation token) {
     starts++;
     return Completer<int>().future;
+  }
+}
+
+class NoopAdapter implements WasmAdapter<int> {
+  @override
+  Future<int> activate(
+      WasmRelease release, ReadAsset bytes, Cancellation cancellation) async {
+    return 1;
+  }
+}
+
+class CleanupAdapter implements WasmAdapter<int>, WasmDeactivator<int> {
+  int starts = 0, stops = 0;
+  @override
+  Future<int> activate(
+      WasmRelease release, ReadAsset bytes, Cancellation cancellation) async {
+    starts++;
+    return starts;
+  }
+
+  @override
+  Future<void> deactivate(int instance) async {
+    stops++;
   }
 }
 
@@ -105,7 +140,8 @@ void main() {
   test('bad warmup does not poison activation', () async {
     final fetch = Fetch()..value = Uint8List(8);
     final host = WasmHost(manifest(), policy: policy(), transport: fetch);
-    await expectLater(host.prefetch(), throwsA(isA<LoaderException>()));
+    final outcome = await host.prefetch();
+    expect(outcome.status, 'failed');
     fetch.value = wasm;
     expect(await host.activate(Adapter()), 8);
   });
@@ -135,6 +171,12 @@ void main() {
       expect(() => parseRelease(r, ['https://assets.example']),
           throwsA(isA<LoaderException>()));
     }
+    expect(() => parseRelease(manifest(), ['https://assets.example/']),
+        throwsA(isA<LoaderException>()));
+    final uppercase = manifest();
+    uppercase['assets'][0]['url'] = 'https://ASSETS.example/main.wasm';
+    expect(() => parseRelease(uppercase, ['https://assets.example']),
+        throwsA(isA<LoaderException>()));
   });
   test('native file bytes survive a new cache instance', () async {
     final dir = await Directory.systemTemp.createTemp('owls-test-');
@@ -154,5 +196,51 @@ void main() {
     r['assets'][0]['url'] = 'https://evil.example/a';
     expect(host.release.assets.first.url, 'https://assets.example/main.wasm');
     expect(jsonDecode(releaseSchemaJson)['schemaVersion'], isNull);
+  });
+  test('preparation leases share one job and release independently', () async {
+    final fetch = SlowFetch();
+    final host = WasmHost(manifest(), policy: policy(), transport: fetch);
+    final one = host.prepare(), two = host.prepare();
+    await fetch.started.future;
+    one.release();
+    expect(two.future, isA<Future<PreparationOutcome>>());
+    fetch.release.complete();
+    expect((await two.future).status, 'warmed');
+    expect(fetch.calls, 1);
+  });
+  test('activation only gives speculative preparation a bounded join',
+      () async {
+    final fetch = SlowFetch();
+    final host = WasmHost(manifest(),
+        policy: LoaderPolicy(
+            origins: ['https://assets.example'],
+            timeout: const Duration(seconds: 1),
+            activationJoin: const Duration(milliseconds: 10)),
+        transport: fetch);
+    final preparation = host.prefetch();
+    await fetch.started.future;
+    final watch = Stopwatch()..start();
+    expect(await host.activate(NoopAdapter()), 1);
+    watch.stop();
+    expect(watch.elapsed, lessThan(const Duration(milliseconds: 200)));
+    fetch.release.complete();
+    expect((await preparation).status, 'cancelled');
+  });
+  test('deactivate calls an optional adapter cleanup and permits restart',
+      () async {
+    final host = WasmHost(manifest(), policy: policy(), transport: Fetch());
+    final adapter = CleanupAdapter();
+    expect(await host.activate(adapter), 1);
+    expect(await host.deactivate(), isTrue);
+    expect(adapter.stops, 1);
+    expect(await host.deactivate(), isFalse);
+    expect(await host.activate(adapter), 2);
+  });
+  test('native transport MIME checks match manifest asset kinds', () {
+    final asset =
+        parseRelease(manifest(), ['https://assets.example']).assets.first;
+    expect(responseContentTypeAllowed(asset, 'application/wasm'), isTrue);
+    expect(responseContentTypeAllowed(asset, 'text/html'), isFalse);
+    expect(responseContentTypeAllowed(asset, null), isFalse);
   });
 }

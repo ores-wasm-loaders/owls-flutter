@@ -24,20 +24,27 @@ Map<String, dynamic> _draft7() {
 
 final _validator = JsonSchema.create(_draft7());
 WasmRelease parseRelease(Object? value, List<String> origins) {
+  if (origins.isEmpty || origins.any((origin) => !_canonicalOrigin(origin))) {
+    throw const LoaderException('origin', 'Canonical HTTPS origins required');
+  }
   if (!_validator.validate(value).isValid) {
     throw const LoaderException('manifest', 'Release JSON Schema mismatch');
   }
   final r = WasmRelease.fromJson(value as Map<String, dynamic>);
   final ids = <String>{}, urls = <String>{};
   for (final a in r.assets) {
-    final u = Uri.parse(a.url);
-    if (u.scheme != 'https' ||
-        u.userInfo.isNotEmpty ||
-        u.hasQuery ||
-        u.hasFragment ||
-        u.host.isEmpty ||
-        u.toString() != a.url ||
-        !origins.contains(u.origin)) {
+    final u = Uri.tryParse(a.url);
+    final canonicalUrl = u != null &&
+        u.scheme == 'https' &&
+        u.userInfo.isEmpty &&
+        u.hasQuery == false &&
+        u.hasFragment == false &&
+        u.host.isNotEmpty &&
+        u.toString() == a.url &&
+        a.url.startsWith('https://') &&
+        (a.url == u.origin || a.url.startsWith('${u.origin}/')) &&
+        origins.contains(u.origin);
+    if (!canonicalUrl) {
       throw const LoaderException(
           'origin', 'Canonical HTTPS allowlist required');
     }
@@ -54,4 +61,16 @@ WasmRelease parseRelease(Object? value, List<String> origins) {
     throw const LoaderException('entrypoint', 'Invalid entrypoint');
   }
   return r;
+}
+
+bool _canonicalOrigin(String value) {
+  final u = Uri.tryParse(value);
+  return u != null &&
+      u.scheme == 'https' &&
+      u.host.isNotEmpty &&
+      u.host == u.host.toLowerCase() &&
+      u.userInfo.isEmpty &&
+      u.hasQuery == false &&
+      u.hasFragment == false &&
+      u.origin == value;
 }
