@@ -1,0 +1,53 @@
+name: Flutter package and lifecycle contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owls-flutter-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the exact interface lock dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ores-wasm-loaders/owls-interfaces
+          ref: 291406191b55606e34b7980b42112e9c77ab690b
+          path: zed_modules/ores-wasm-loaders/owls-interfaces
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.44.2"
+          channel: stable
+          cache: true
+      - name: Verify package and lock provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'name: owls_flutter' pubspec.yaml
+          grep -F 'version: 0.1.1' pubspec.yaml
+          grep -F 'name = "owls-interfaces"' .zpkg.lock
+          grep -F 'version = "0.1.1"' .zpkg.lock
+          grep -F 'vcs_commit = "291406191b55606e34b7980b42112e9c77ab690b"' .zpkg.lock
+          test -f zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
+      - name: Resolve the immutable Dart graph
+        run: flutter pub get --enforce-lockfile
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Analyze
+        run: flutter analyze
+      - name: Test preparation, activation, cleanup, MIME, URL, and bridge contracts
+        run: flutter test --reporter expanded
