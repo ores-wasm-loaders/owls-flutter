@@ -50,8 +50,12 @@ jobs:
           test -f zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
       - name: Resolve the immutable Dart graph
         run: flutter pub get --enforce-lockfile
-      - name: Check formatting
-        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Format and reject committed source drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          dart format lib test
+          git diff --exit-code -- lib test
       - name: Analyze
         run: flutter analyze
       - name: Test preparation, activation, cleanup, MIME, URL, and bridge contracts
@@ -84,6 +88,12 @@ jobs:
           test "$(git -C zed_modules/ores-wasm-loaders/owls-interfaces rev-parse HEAD)" = "$CURRENT_INTERFACES_REF"
           grep -F 'name: owls_interfaces' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
           grep -F 'version: 0.1.1' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
+      - name: Format and reject committed source drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          dart format lib test
+          git diff --exit-code -- lib test
       - name: Materialize exact current Schema A into the canary build
         shell: bash
         run: |
@@ -108,7 +118,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dart format --output=none --set-exit-if-changed lib test
           flutter analyze
           flutter test --reporter expanded
       - name: Record immutable compatibility evidence
