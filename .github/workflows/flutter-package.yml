@@ -89,7 +89,14 @@ jobs:
           grep -F 'name: owls_interfaces' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
           grep -F 'version: 0.1.1' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
           test -f zed_modules/ores-wasm-loaders/owls-interfaces/dart/lib/json.dart
-      - name: Format and reject committed source drift
+      - name: Resolve without mutating the committed lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp pubspec.lock "$RUNNER_TEMP/pubspec.lock"
+          flutter pub get --enforce-lockfile
+          cmp pubspec.lock "$RUNNER_TEMP/pubspec.lock"
+      - name: Format under the resolved package language version
         shell: bash
         run: |
           set -euo pipefail
@@ -108,13 +115,6 @@ jobs:
             printf "''';\n"
           } > lib/src/release_schema.dart
           grep -F 'release-v2.json' lib/src/release_schema.dart
-      - name: Resolve without mutating the committed lockfile
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp pubspec.lock "$RUNNER_TEMP/pubspec.lock"
-          flutter pub get --enforce-lockfile
-          cmp pubspec.lock "$RUNNER_TEMP/pubspec.lock"
       - name: Compile and test the Flutter host against current Schema A and Dart projection
         shell: bash
         run: |
