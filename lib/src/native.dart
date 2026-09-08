@@ -5,6 +5,40 @@ import 'package:owls_interfaces/owls_interfaces.dart';
 import 'core.dart';
 import 'manifest.dart';
 
+bool responseContentTypeAllowed(WasmAsset asset, String? value) {
+  if (value == null) return false;
+  final mime = value.split(';').first.trim().toLowerCase();
+  switch (asset.kind) {
+    case 'wasm':
+      return mime == 'application/wasm';
+    case 'module':
+    case 'script':
+      return {
+        'application/javascript',
+        'application/ecmascript',
+        'text/javascript',
+        'text/ecmascript',
+        'application/x-javascript'
+      }.contains(mime);
+    case 'font':
+      return {
+        'font/otf',
+        'font/ttf',
+        'font/woff',
+        'font/woff2',
+        'application/font-woff',
+        'application/font-woff2',
+        'application/vnd.ms-fontobject'
+      }.contains(mime);
+    case 'data':
+      return mime.isNotEmpty &&
+          mime != 'text/html' &&
+          mime != 'application/xhtml+xml';
+    default:
+      return false;
+  }
+}
+
 class HttpAssetTransport implements AssetTransport {
   final Duration timeout;
   const HttpAssetTransport({this.timeout = const Duration(seconds: 30)});
@@ -20,6 +54,10 @@ class HttpAssetTransport implements AssetTransport {
       final response = await request.close();
       if (response.statusCode != 200)
         throw const LoaderException('http', 'Asset request failed');
+      if (!responseContentTypeAllowed(
+          asset, response.headers.contentType?.mimeType)) {
+        throw const LoaderException('mime', 'Unexpected asset content type');
+      }
       final chunks = BytesBuilder(copy: false);
       await for (final chunk in response) {
         cancellation.check();

@@ -7,26 +7,41 @@ import 'manifest.dart';
 
 class Cancellation {
   bool _cancelled = false;
+  String? _reason;
   final _listeners = <void Function()>[];
   bool get isCancelled => _cancelled;
+  String? get reason => _reason;
   void check() {
-    if (_cancelled) throw const LoaderException('cancelled', 'Cancelled');
+    if (_cancelled) {
+      final code = _reason ?? 'cancelled';
+      throw LoaderException(
+          code, code == 'timeout' ? 'Timed out' : 'Cancelled');
+    }
   }
 
   void Function() listen(void Function() listener) {
     if (_cancelled) {
-      listener();
+      try {
+        listener();
+      } catch (_) {
+        // A late listener cannot prevent the caller from observing cancellation.
+      }
       return () {};
     }
     _listeners.add(listener);
     return () => _listeners.remove(listener);
   }
 
-  void cancel() {
+  void cancel([String reason = 'cancelled']) {
     if (_cancelled) return;
     _cancelled = true;
+    _reason = reason;
     for (final listener in List.of(_listeners)) {
-      listener();
+      try {
+        listener();
+      } catch (_) {
+        // Cancellation must reach every listener even if one cleanup hook fails.
+      }
     }
     _listeners.clear();
   }
@@ -36,15 +51,23 @@ class LoaderPolicy {
   final List<String> origins;
   final int maxPrepareBytes, maxAssetBytes;
   final bool allowPreparation;
-  final Duration timeout;
+  final Duration timeout, activationJoin;
   LoaderPolicy(
       {required List<String> origins,
       this.maxPrepareBytes = 8 * 1024 * 1024,
       this.maxAssetBytes = 64 * 1024 * 1024,
       this.allowPreparation = true,
-      this.timeout = const Duration(seconds: 30)})
-      : origins = List.unmodifiable(origins) {
-    if (maxPrepareBytes < 1 || maxAssetBytes < 1 || timeout <= Duration.zero) {
+      this.timeout = const Duration(seconds: 30),
+      Duration? activationJoin})
+      : origins = List.unmodifiable(origins),
+        activationJoin =
+            (activationJoin ?? const Duration(milliseconds: 50)) > timeout
+                ? timeout
+                : (activationJoin ?? const Duration(milliseconds: 50)) {
+    if (maxPrepareBytes < 1 ||
+        maxAssetBytes < 1 ||
+        timeout <= Duration.zero ||
+        this.activationJoin < Duration.zero) {
       throw const LoaderException('budget', 'Invalid policy');
     }
   }
@@ -63,7 +86,11 @@ class MemoryStore implements ByteStore {
   final int maxBytes;
   final _values = LinkedHashMap<String, Uint8List>();
   int _size = 0;
-  MemoryStore({this.maxBytes = 64 * 1024 * 1024});
+  MemoryStore({this.maxBytes = 64 * 1024 * 1024}) {
+    if (maxBytes < 1) {
+      throw const LoaderException('budget', 'Invalid cache limit');
+    }
+  }
   @override
   Future<Uint8List?> get(String digest) async {
     final bytes = _values.remove(digest);
@@ -90,11 +117,51 @@ abstract interface class WasmAdapter<T> {
       WasmRelease release, ReadAsset bytes, Cancellation cancellation);
 }
 
+/// Optional lifecycle half for adapters that retain framework/runtime resources.
+abstract interface class WasmDeactivator<T> {
+  Future<void> deactivate(T instance);
+}
+
 void verifyBytes(WasmAsset asset, Uint8List bytes) {
   if (bytes.length != asset.bytes ||
       sha256.convert(bytes).toString() != asset.sha256) {
     throw const LoaderException('integrity', 'Asset size or SHA-256 mismatch');
   }
+}
+
+class PreparationOutcome {
+  final String status;
+  final List<String> prepared, skipped;
+  final int bytes;
+  final String? reason;
+  PreparationOutcome(
+      {required this.status,
+      required List<String> prepared,
+      required List<String> skipped,
+      required this.bytes,
+      this.reason})
+      : prepared = List.unmodifiable(prepared),
+        skipped = List.unmodifiable(skipped);
+}
+
+class PreparationLease {
+  final Future<PreparationOutcome> future;
+  final void Function() _release;
+  bool _released = false;
+  PreparationLease(this.future, this._release);
+  void release() {
+    if (_released) return;
+    _released = true;
+    _release();
+  }
+}
+
+class _PreparationJob {
+  final Cancellation cancellation;
+  final leases = <Object>{};
+  late Future<PreparationOutcome> future;
+  bool claimed = false, settled = false;
+  _PreparationJob(this.cancellation);
 }
 
 /// One immutable release per host. Keep the host alive to retain activation.
@@ -103,9 +170,10 @@ class WasmHost {
   final LoaderPolicy policy;
   final AssetTransport transport;
   final ByteStore store;
-  Future<void>? _preparing;
+  _PreparationJob? _preparing;
   Future<Object?>? _active;
   Object? _adapter;
+  Future<void> Function(Object?)? _cleanup;
   WasmHost(Object? manifest,
       {required this.policy, required this.transport, ByteStore? store})
       : release = parseRelease(manifest, policy.origins),
@@ -128,13 +196,13 @@ class WasmHost {
         cancellation.check();
         return cached;
       } on LoaderException catch (e) {
-        if (e.code == 'cancelled') rethrow;
+        if (e.code == 'cancelled' || e.code == 'timeout') rethrow;
       }
     }
     final data = await transport
         .fetch(asset, cancellation)
         .timeout(policy.timeout, onTimeout: () {
-      cancellation.cancel();
+      cancellation.cancel('timeout');
       throw const LoaderException('timeout', 'Asset timed out');
     });
     cancellation.check();
@@ -145,31 +213,121 @@ class WasmHost {
     return Uint8List.fromList(data);
   }
 
-  Future<void> prefetch({Cancellation? cancellation}) {
-    if (!policy.allowPreparation) return Future.value();
-    if (cancellation == null && _preparing != null) return _preparing!;
-    final own = cancellation ?? Cancellation();
+  PreparationLease prepare({Cancellation? cancellation}) {
+    if (!policy.allowPreparation) {
+      return PreparationLease(
+          Future.value(PreparationOutcome(
+              status: 'skipped',
+              prepared: const [],
+              skipped: release.assets
+                  .where((a) => a.prepare)
+                  .map((a) => a.id)
+                  .toList(),
+              bytes: 0,
+              reason: 'policy-declined')),
+          () {});
+    }
     final assets = release.assets.where((a) => a.prepare).toList();
     if (assets.fold<int>(0, (n, a) => n + a.bytes) > policy.maxPrepareBytes ||
         assets.any((a) => a.bytes > policy.maxAssetBytes)) {
-      return Future.error(
-          const LoaderException('budget', 'Preparation exceeds budget'));
+      throw const LoaderException('budget', 'Preparation exceeds budget');
     }
-    final timer = Timer(policy.timeout, own.cancel);
-    final future = (() async {
-      for (final a in assets) {
-        await bytes(a.id, own);
+    final job = _preparing ?? _newPreparation();
+    final leaseKey = Object();
+    job.leases.add(leaseKey);
+    var released = false;
+    void Function()? unlisten;
+    void releaseLease() {
+      if (released) return;
+      released = true;
+      job.leases.remove(leaseKey);
+      unlisten?.call();
+      if (!job.settled && !job.claimed && job.leases.isEmpty) {
+        job.cancellation.cancel();
       }
-    })()
-        .timeout(policy.timeout, onTimeout: () {
-      own.cancel();
-      throw const LoaderException('timeout', 'Preparation timed out');
-    }).whenComplete(() {
+    }
+
+    if (cancellation != null) unlisten = cancellation.listen(releaseLease);
+    return PreparationLease(job.future, releaseLease);
+  }
+
+  Future<PreparationOutcome> prefetch({Cancellation? cancellation}) {
+    try {
+      final lease = prepare(cancellation: cancellation);
+      return lease.future
+          .then((outcome) => cancellation?.isCancelled == true
+              ? PreparationOutcome(
+                  status: 'cancelled',
+                  prepared: outcome.prepared,
+                  skipped: outcome.skipped,
+                  bytes: outcome.bytes,
+                  reason: 'caller-aborted')
+              : outcome)
+          .whenComplete(lease.release);
+    } catch (error) {
+      return Future.error(error);
+    }
+  }
+
+  _PreparationJob _newPreparation() {
+    final job = _PreparationJob(Cancellation());
+    _preparing = job;
+    final timer =
+        Timer(policy.timeout, () => job.cancellation.cancel('timeout'));
+    job.future = _runPreparation(job).whenComplete(() {
       timer.cancel();
-      if (cancellation == null) _preparing = null;
+      job.settled = true;
+      if (identical(_preparing, job)) _preparing = null;
     });
-    if (cancellation == null) _preparing = future;
-    return future;
+    return job;
+  }
+
+  Future<PreparationOutcome> _runPreparation(_PreparationJob job) async {
+    final assets = release.assets.where((a) => a.prepare).toList();
+    final prepared = <String>[];
+    try {
+      for (final asset in assets) {
+        await bytes(asset.id, job.cancellation);
+        prepared.add(asset.id);
+      }
+      return _outcome('warmed', assets, prepared, null);
+    } catch (error) {
+      final cancelled = job.cancellation.isCancelled;
+      return _outcome(cancelled ? 'cancelled' : 'failed', assets, prepared,
+          job.cancellation.reason ?? _reasonOf(error));
+    }
+  }
+
+  PreparationOutcome _outcome(String status, List<WasmAsset> assets,
+      List<String> prepared, String? reason) {
+    final preparedSet = prepared.toSet();
+    return PreparationOutcome(
+        status: status,
+        prepared: prepared,
+        skipped: assets
+            .where((asset) => !preparedSet.contains(asset.id))
+            .map((asset) => asset.id)
+            .toList(),
+        bytes: assets
+            .where((asset) => preparedSet.contains(asset.id))
+            .fold<int>(0, (n, asset) => n + asset.bytes),
+        reason: reason);
+  }
+
+  Future<void> _joinPreparation(_PreparationJob job) async {
+    if (job.settled) return;
+    if (policy.activationJoin == Duration.zero) {
+      job.cancellation.cancel();
+      return;
+    }
+    try {
+      await job.future.timeout(policy.activationJoin);
+    } on TimeoutException {
+      job.cancellation.cancel();
+    } catch (_) {
+      // Preparation outcomes are normally values; activation still owns retry.
+    }
+    if (!job.settled) job.cancellation.cancel();
   }
 
   Future<T> activate<T>(WasmAdapter<T> adapter) {
@@ -179,19 +337,47 @@ class WasmHost {
             'adapter-conflict', 'Activation already has an owner'));
       return _active!.then((v) => v as T);
     }
+    final preparation = _preparing;
+    if (preparation != null) preparation.claimed = true;
     _adapter = adapter;
+    _cleanup = null;
     final token = Cancellation();
     final future = (() async {
-      try {
-        await _preparing;
-      } catch (_) {/* demand load retries */}
-      return adapter.activate(release, (id) => bytes(id, token), token);
+      if (preparation != null) await _joinPreparation(preparation);
+      final instance =
+          await adapter.activate(release, (id) => bytes(id, token), token);
+      if (adapter is WasmDeactivator<T>) {
+        final deactivator = adapter as WasmDeactivator<T>;
+        _cleanup = (value) => deactivator.deactivate(value as T);
+      }
+      return instance;
     })()
         .timeout(policy.timeout, onTimeout: () {
-      token.cancel();
+      token.cancel('timeout');
       throw const LoaderException('timeout', 'Activation timed out');
     });
     _active = future;
     return future;
   }
+
+  /// Release a retained activation; a later activate call is then deliberate.
+  Future<bool> deactivate() async {
+    final active = _active;
+    if (active == null) return false;
+    try {
+      final instance = await active;
+      await _cleanup?.call(instance);
+    } finally {
+      _active = null;
+      _adapter = null;
+      _cleanup = null;
+    }
+    return true;
+  }
+}
+
+String _reasonOf(Object error) {
+  if (error is LoaderException) return error.code;
+  if (error is TimeoutException) return 'timeout';
+  return 'error';
 }
