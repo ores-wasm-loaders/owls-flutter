@@ -15,7 +15,7 @@ concurrency:
 
 env:
   RELEASED_INTERFACES_REF: 291406191b55606e34b7980b42112e9c77ab690b
-  CURRENT_INTERFACES_REF: f8fc1873c1b402c04f67dbf62f89b3691ba300fe
+  CURRENT_INTERFACES_REF: be66ef301484fcba52e1a645a7072285d2695860
 
 jobs:
   package:
@@ -88,6 +88,7 @@ jobs:
           test "$(git -C zed_modules/ores-wasm-loaders/owls-interfaces rev-parse HEAD)" = "$CURRENT_INTERFACES_REF"
           grep -F 'name: owls_interfaces' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
           grep -F 'version: 0.1.1' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
+          test -f zed_modules/ores-wasm-loaders/owls-interfaces/dart/lib/json.dart
       - name: Format and reject committed source drift
         shell: bash
         run: |
