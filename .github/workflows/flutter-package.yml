@@ -54,8 +54,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dart format lib test
-          git diff --exit-code -- lib test
+          dart format lib test tool
+          git diff --exit-code -- lib test tool
       - name: Analyze
         run: flutter analyze
       - name: Test preparation, activation, cleanup, MIME, URL, and bridge contracts
@@ -100,8 +100,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dart format lib test
-          git diff --exit-code -- lib test
+          dart format lib test tool
+          git diff --exit-code -- lib test tool
       - name: Materialize exact current Schema A into the canary build
         shell: bash
         run: |
@@ -121,6 +121,7 @@ jobs:
           set -euo pipefail
           flutter analyze
           flutter test --reporter expanded
+          dart run tool/current_interface_check.dart
       - name: Record immutable compatibility evidence
         if: always()
         shell: bash
