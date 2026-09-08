@@ -112,8 +112,8 @@ Map<String, dynamic> _normalizeJsonIntegers(Map<String, dynamic> value) {
     final normalized = Map<String, dynamic>.from(budget);
     for (final field in const ['maxBytes', 'maxConcurrency']) {
       if (normalized.containsKey(field)) {
-        normalized[field] = _jsonInteger(
-            normalized[field], r'$.prepareBudget.' + field);
+        normalized[field] =
+            _jsonInteger(normalized[field], r'$.prepareBudget.' + field);
       }
     }
     release['prepareBudget'] = normalized;
