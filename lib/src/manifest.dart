@@ -35,7 +35,7 @@ int _jsonInteger(Object? value, String path) {
   throw LoaderException('manifest', '$path must be an integer-valued number');
 }
 
-/// Detach and normalize only the release-v1 fields declared as JSON Schema integers.
+/// Detach and normalize only fields declared as JSON Schema integers.
 /// JSON Schema accepts 1.0 as an integer; the strict Dart projection intentionally
 /// accepts only `int` after this boundary conversion.
 Map<String, dynamic> _normalizeJsonIntegers(Map<String, dynamic> value) {
@@ -48,10 +48,20 @@ Map<String, dynamic> _normalizeJsonIntegers(Map<String, dynamic> value) {
       final entry = assets[index];
       if (entry is! Map) return entry;
       final asset = Map<String, dynamic>.from(entry);
-      asset['bytes'] =
-          _jsonInteger(asset['bytes'], r'$.assets[].bytes');
+      asset['bytes'] = _jsonInteger(asset['bytes'], r'$.assets[].bytes');
       return asset;
     }, growable: false);
+  }
+  final budget = release['prepareBudget'];
+  if (budget is Map) {
+    final normalized = Map<String, dynamic>.from(budget);
+    for (final field in const ['maxBytes', 'maxConcurrency']) {
+      if (normalized.containsKey(field)) {
+        normalized[field] = _jsonInteger(
+            normalized[field], r'$.prepareBudget.' + field);
+      }
+    }
+    release['prepareBudget'] = normalized;
   }
   return release;
 }
