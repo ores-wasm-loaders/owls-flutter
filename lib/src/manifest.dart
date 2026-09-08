@@ -11,15 +11,70 @@ class LoaderException implements Exception {
   String toString() => 'LoaderException($code): $message';
 }
 
-/// Our released schema uses only Draft-7-compatible validation keywords.
-/// Rewrite definition pointers; do not silently discard validation keywords.
+const _compositionKeywords = {
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  'if',
+  'then',
+  'else',
+  'dependentSchemas',
+};
+
+Object? _draft7Node(Object? value, Set<String> definitions) {
+  if (value is List) {
+    return value
+        .map((entry) => _draft7Node(entry, definitions))
+        .toList(growable: false);
+  }
+  if (value is! Map) return value;
+
+  final source = Map<String, dynamic>.from(value);
+  if (source.containsKey('unevaluatedProperties')) {
+    if (source.containsKey('additionalProperties') ||
+        _compositionKeywords.any(source.containsKey)) {
+      throw StateError(
+          'Cannot lower unevaluatedProperties to Draft 7 without changing semantics');
+    }
+  }
+
+  final result = <String, dynamic>{};
+  for (final entry in source.entries) {
+    var key = entry.key;
+    var child = entry.value;
+    if (key == r'$schema' &&
+        child == 'https://json-schema.org/draft/2020-12/schema') {
+      child = 'http://json-schema.org/draft-07/schema#';
+    } else if (key == r'$defs') {
+      key = 'definitions';
+    } else if (key == 'unevaluatedProperties') {
+      key = 'additionalProperties';
+    } else if (key == r'$ref' && child is String) {
+      if (child.startsWith(r'#/$defs/')) {
+        child = '#/definitions/${child.substring(r'#/$defs/'.length)}';
+      } else if (definitions.contains(child)) {
+        child = '#/definitions/$child';
+      }
+    }
+    result[key] = _draft7Node(child, definitions);
+  }
+  return result;
+}
+
+/// Lower the supported OWLS Draft 2020-12 subset into the validator's Draft 7
+/// representation. Refuse constructs for which `unevaluatedProperties` cannot
+/// be represented by `additionalProperties` without changing semantics.
 Map<String, dynamic> _draft7() {
-  final text = releaseSchemaJson
-      .replaceAll('https://json-schema.org/draft/2020-12/schema',
-          'http://json-schema.org/draft-07/schema#')
-      .replaceAll(r'"$defs"', '"definitions"')
-      .replaceAll(r'#/$defs/', '#/definitions/');
-  return jsonDecode(text) as Map<String, dynamic>;
+  final decoded = jsonDecode(releaseSchemaJson);
+  if (decoded is! Map<String, dynamic>) {
+    throw StateError('Release Schema A root must be an object');
+  }
+  final definitions = decoded[r'$defs'];
+  final names = definitions is Map
+      ? definitions.keys.whereType<String>().toSet()
+      : <String>{};
+  return _draft7Node(decoded, names) as Map<String, dynamic>;
 }
 
 final _validator = JsonSchema.create(_draft7());
