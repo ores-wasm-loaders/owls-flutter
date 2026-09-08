@@ -58,7 +58,7 @@ jobs:
         run: flutter test --reporter expanded
 
   current-interface-compatibility:
-    name: current admitted interface compatibility
+    name: current Schema A and Dart projection compatibility
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -84,6 +84,19 @@ jobs:
           test "$(git -C zed_modules/ores-wasm-loaders/owls-interfaces rev-parse HEAD)" = "$CURRENT_INTERFACES_REF"
           grep -F 'name: owls_interfaces' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
           grep -F 'version: 0.1.1' zed_modules/ores-wasm-loaders/owls-interfaces/dart/pubspec.yaml
+      - name: Materialize exact current Schema A into the canary build
+        shell: bash
+        run: |
+          set -euo pipefail
+          schema=zed_modules/ores-wasm-loaders/owls-interfaces/schemas/release.schema.json
+          test -s "$schema"
+          {
+            printf '%s\n' '// Generated only for this exact-revision compatibility canary.'
+            printf "const releaseSchemaJson = r'''"
+            cat "$schema"
+            printf "''';\n"
+          } > lib/src/release_schema.dart
+          grep -F 'release-v2.json' lib/src/release_schema.dart
       - name: Resolve without mutating the committed lockfile
         shell: bash
         run: |
@@ -91,7 +104,7 @@ jobs:
           cp pubspec.lock "$RUNNER_TEMP/pubspec.lock"
           flutter pub get --enforce-lockfile
           cmp pubspec.lock "$RUNNER_TEMP/pubspec.lock"
-      - name: Compile and test the Flutter host against the current interfaces
+      - name: Compile and test the Flutter host against current Schema A and Dart projection
         shell: bash
         run: |
           set -euo pipefail
@@ -107,6 +120,7 @@ jobs:
           {
             printf 'flutter_host=%s\n' "$(git rev-parse HEAD)"
             printf 'interfaces=%s\n' "$(git -C zed_modules/ores-wasm-loaders/owls-interfaces rev-parse HEAD)"
+            printf 'schema_a_sha256=%s\n' "$(sha256sum zed_modules/ores-wasm-loaders/owls-interfaces/schemas/release.schema.json | cut -d' ' -f1)"
             printf 'flutter=%s\n' "$(flutter --version --machine | tr -d '\n')"
           } > evidence/current-interface-compatibility.txt
       - name: Preserve compatibility evidence
