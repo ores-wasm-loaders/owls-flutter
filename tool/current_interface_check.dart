@@ -50,7 +50,8 @@ Future<void> main() async {
       _fail('${fixture.path}: release assets must be a non-empty array');
     }
     final origins = assets
-        .map((asset) => Uri.parse((asset as Map<String, dynamic>)['url'] as String).origin)
+        .map((asset) =>
+            Uri.parse((asset as Map<String, dynamic>)['url'] as String).origin)
         .toSet()
         .toList()
       ..sort();
