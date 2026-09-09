@@ -16,8 +16,96 @@ concurrency:
 env:
   RELEASED_INTERFACES_REF: 291406191b55606e34b7980b42112e9c77ab690b
   CURRENT_INTERFACES_REF: be66ef301484fcba52e1a645a7072285d2695860
+  TSJSV_REF: 6bb5b7c1ee41c8b43741e50a264c33a1165549c4
 
 jobs:
+  contract-admission:
+    name: TypeSpec and JSON Schema Contract IR admission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out Flutter host
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out exact current interface authority pair
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ores-wasm-loaders/owls-interfaces
+          ref: ${{ env.CURRENT_INTERFACES_REF }}
+          path: subject/owls-interfaces
+          persist-credentials: false
+      - name: Check out exact TypeSpec and JSON Schema validator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/typespec-json-schema-validator
+          ref: ${{ env.TSJSV_REF }}
+          path: subject/owls-interfaces/.tools/typespec-json-schema-validator
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install the validator's lockfile-pinned toolchain
+        working-directory: subject/owls-interfaces/.tools/typespec-json-schema-validator
+        run: npm ci --omit=dev
+      - name: Verify exact source closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C subject/owls-interfaces rev-parse HEAD)" = "$CURRENT_INTERFACES_REF"
+          test "$(git -C subject/owls-interfaces/.tools/typespec-json-schema-validator rev-parse HEAD)" = "$TSJSV_REF"
+          case "$CURRENT_INTERFACES_REF:$TSJSV_REF" in
+            *[!0-9a-f:]*|*:|:*) exit 1 ;;
+          esac
+          test "${#CURRENT_INTERFACES_REF}" -eq 40
+          test "${#TSJSV_REF}" -eq 40
+      - name: Generate Schema B, compare peer authorities, and emit Contract IR
+        working-directory: subject/owls-interfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .tools/typespec-json-schema-validator/bin/typespec-json-schema-validator.mjs check \
+            --typespec=contracts/main.tsp \
+            --schema=schemas/release.schema.json \
+            --report=.typespec-json-schema-validator/report.json \
+            --contract-ir=.typespec-json-schema-validator/contract-ir.json \
+            --output-dir=.typespec-json-schema-validator/generated \
+            --max-probes=96 \
+            --quiet
+      - name: Verify the receipt, source digests, Contract IR, and language projections
+        working-directory: subject/owls-interfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-contract-ir.mjs
+          node scripts/check-language-projections.mjs
+      - name: Record the Flutter boundary evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence=subject/owls-interfaces/.typespec-json-schema-validator
+          {
+            printf 'flutter_host=%s\n' "$(git rev-parse HEAD)"
+            printf 'interfaces=%s\n' "$CURRENT_INTERFACES_REF"
+            printf 'validator=%s\n' "$TSJSV_REF"
+            printf 'node=%s\n' "$(node --version)"
+          } > "$evidence/flutter-boundary-versions.txt"
+          sha256sum \
+            "$evidence/report.json" \
+            "$evidence/contract-ir.json" \
+            "$evidence/projection-receipt.json" \
+            > "$evidence/flutter-boundary-sha256.txt"
+      - name: Preserve exact contract-admission evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-contract-admission-${{ github.sha }}
+          path: subject/owls-interfaces/.typespec-json-schema-validator/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
+
   package:
     name: locked release package
     runs-on: ubuntu-24.04
