@@ -36,8 +36,11 @@ String exactRef(String workflow, String name) {
 }
 
 void main() {
-  test('Flutter current-contract boundary uses canonical complete-scope TJSV admission', () {
-    final workflow = File('.github/workflows/flutter-package.yml').readAsStringSync();
+  test(
+      'Flutter current-contract boundary uses canonical complete-scope TJSV admission',
+      () {
+    final workflow =
+        File('.github/workflows/flutter-package.yml').readAsStringSync();
     final currentInterfaces = exactRef(workflow, 'CURRENT_INTERFACES_REF');
     final releasedInterfaces = exactRef(workflow, 'RELEASED_INTERFACES_REF');
     final validator = exactRef(workflow, 'TSJSV_REF');
@@ -45,12 +48,15 @@ void main() {
     expect(currentInterfaces, '76364a23364993ff4be1ed82a4978725ed6f811c');
     expect(validator, '03ccc0ecdfc70f9198c3ccf80718910961d3fde1');
     expect(currentInterfaces, isNot(releasedInterfaces),
-        reason: 'released package lock and current compatibility canary are distinct boundaries');
+        reason:
+            'released package lock and current compatibility canary are distinct boundaries');
 
-    expect(workflow, contains('repository: ORESoftware/typespec-json-schema-validator'));
+    expect(workflow,
+        contains('repository: ORESoftware/typespec-json-schema-validator'));
     expect(workflow, contains('ref: \${{ env.TSJSV_REF }}'));
     expect(workflow, contains('ref: \${{ env.CURRENT_INTERFACES_REF }}'));
-    expect(workflow, contains('--instances=.typespec-json-schema-validator/instances'));
+    expect(workflow,
+        contains('--instances=.typespec-json-schema-validator/instances'));
     expect(workflow, contains('fixtures/valid/*.json'));
     expect(workflow, contains('instances/Release/valid'));
     expect(
