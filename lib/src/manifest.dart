@@ -22,10 +22,14 @@ const _compositionKeywords = {
   'dependentSchemas',
 };
 
-Object? _draft7Node(Object? value, Set<String> definitions) {
+Object? _draft7Node(
+  Object? value,
+  Set<String> definitions, {
+  required bool isRoot,
+}) {
   if (value is List) {
     return value
-        .map((entry) => _draft7Node(entry, definitions))
+        .map((entry) => _draft7Node(entry, definitions, isRoot: false))
         .toList(growable: false);
   }
   if (value is! Map) return value;
@@ -43,9 +47,17 @@ Object? _draft7Node(Object? value, Set<String> definitions) {
   for (final entry in source.entries) {
     var key = entry.key;
     var child = entry.value;
-    if (key == r'$schema' &&
-        child == 'https://json-schema.org/draft/2020-12/schema') {
-      child = 'http://json-schema.org/draft-07/schema#';
+    if (key == r'$schema') {
+      if (!isRoot) continue;
+      if (child == 'https://json-schema.org/draft/2020-12/schema') {
+        child = 'http://json-schema.org/draft-07/schema#';
+      }
+    } else if (key == r'$id' && !isRoot) {
+      // Draft 2020-12 allows each $defs entry to be its own resource. After
+      // lowering bare resource references to local Draft 7 definitions, those
+      // nested IDs would change the base URI and make #/definitions/... point
+      // at the wrong resource. The root ID remains intact for diagnostics.
+      continue;
     } else if (key == r'$defs') {
       key = 'definitions';
     } else if (key == 'unevaluatedProperties') {
@@ -57,7 +69,7 @@ Object? _draft7Node(Object? value, Set<String> definitions) {
         child = '#/definitions/$child';
       }
     }
-    result[key] = _draft7Node(child, definitions);
+    result[key] = _draft7Node(child, definitions, isRoot: false);
   }
   return result;
 }
@@ -74,7 +86,7 @@ Map<String, dynamic> _draft7() {
   final names = definitions is Map
       ? definitions.keys.whereType<String>().toSet()
       : <String>{};
-  return _draft7Node(decoded, names) as Map<String, dynamic>;
+  return _draft7Node(decoded, names, isRoot: true) as Map<String, dynamic>;
 }
 
 final _validator = JsonSchema.create(_draft7());
