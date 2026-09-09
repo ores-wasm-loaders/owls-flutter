@@ -59,7 +59,8 @@ Future<void> main() async {
     final parsed = parseRelease(decoded, origins);
     sawV1 = sawV1 || parsed.schemaVersion == 1;
     sawV2 = sawV2 || parsed.schemaVersion == 2;
-    if (!_deepEqual(decoded, parsed.toJson())) {
+    final roundTrip = jsonDecode(jsonEncode(parsed));
+    if (!_deepEqual(decoded, roundTrip)) {
       _fail('${fixture.path}: Flutter host round trip changed the release');
     }
   }
