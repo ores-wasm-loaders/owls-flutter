@@ -133,6 +133,25 @@ Map<String, dynamic> _normalizeJsonIntegers(Map<String, dynamic> value) {
   return release;
 }
 
+/// Read the dependency member through the wire projection while retaining
+/// compatibility with the currently released pre-DAG Dart package. The current
+/// TJSV-admitted projection has a typed `dependencies` getter; the released
+/// projection does not. This bridge disappears once the package dependency is
+/// promoted and is not a separate wire authority.
+List<String> _assetDependencies(WasmAsset asset) {
+  try {
+    final dynamic raw = (asset as dynamic).dependencies;
+    if (raw == null) return const <String>[];
+    if (raw is! List || raw.any((value) => value is! String)) {
+      throw const LoaderException(
+          'manifest', 'Asset dependencies must be string identifiers');
+    }
+    return List<String>.unmodifiable(raw.cast<String>());
+  } on NoSuchMethodError {
+    return const <String>[];
+  }
+}
+
 /// Return a dependency-first, duplicate-free closure ending with [assetId].
 ///
 /// This is consumer behavior over the TJSV-admitted wire projection, not a
@@ -159,7 +178,7 @@ List<WasmAsset> dependencyClosure(WasmRelease release, String assetId) {
       throw LoaderException(
           'manifest', 'Dependency references missing asset `$id`');
     }
-    for (final dependency in asset.dependencies ?? const <String>[]) {
+    for (final dependency in _assetDependencies(asset)) {
       visit(dependency);
     }
     visiting.remove(id);
@@ -206,7 +225,7 @@ WasmRelease parseRelease(Object? value, List<String> origins) {
 
   for (final asset in r.assets) {
     final dependencies = <String>{};
-    for (final dependency in asset.dependencies ?? const <String>[]) {
+    for (final dependency in _assetDependencies(asset)) {
       if (dependency == asset.id) {
         throw LoaderException(
             'manifest', 'Asset `${asset.id}` cannot depend on itself');
