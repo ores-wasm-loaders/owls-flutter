@@ -45,7 +45,7 @@ void main() {
     final releasedInterfaces = exactRef(workflow, 'RELEASED_INTERFACES_REF');
     final validator = exactRef(workflow, 'TSJSV_REF');
 
-    expect(currentInterfaces, 'cfe0b18fe9ae361d94ea0646627cb732465b5496');
+    expect(currentInterfaces, 'ff6d5ba6ea8da130854eb511994eb0547ff44988');
     expect(validator, '03ccc0ecdfc70f9198c3ccf80718910961d3fde1');
     expect(currentInterfaces, isNot(releasedInterfaces),
         reason:
