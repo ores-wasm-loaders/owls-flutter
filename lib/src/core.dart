@@ -269,6 +269,43 @@ class WasmHost {
     }
   }
 
+  /// Fetch, verify and cache one explicit asset dependency closure.
+  ///
+  /// Explicit intent may include lazy/prepare:false assets, but it does not
+  /// execute framework or application code. Ambient [prepare] remains governed
+  /// solely by the manifest's `prepare` flags.
+  Future<PreparationOutcome> prefetchAsset(String id,
+      {Cancellation? cancellation}) async {
+    final assets = dependencyClosure(release, id);
+    if (!policy.allowPreparation) {
+      return _outcome(
+          'skipped', assets, const <String>[], 'policy-declined');
+    }
+    if (assets.fold<int>(0, (n, asset) => n + asset.bytes) >
+            policy.maxPrepareBytes ||
+        assets.any((asset) => asset.bytes > policy.maxAssetBytes)) {
+      throw const LoaderException('budget', 'Preparation exceeds budget');
+    }
+
+    final token = cancellation ?? Cancellation();
+    final timer = Timer(policy.timeout, () => token.cancel('timeout'));
+    final prepared = <String>[];
+    try {
+      token.check();
+      for (final asset in assets) {
+        await bytes(asset.id, token);
+        prepared.add(asset.id);
+      }
+      return _outcome('warmed', assets, prepared, null);
+    } catch (error) {
+      final cancelled = token.isCancelled;
+      return _outcome(cancelled ? 'cancelled' : 'failed', assets, prepared,
+          token.reason ?? _reasonOf(error));
+    } finally {
+      timer.cancel();
+    }
+  }
+
   _PreparationJob _newPreparation() {
     final job = _PreparationJob(Cancellation());
     _preparing = job;

@@ -133,6 +133,63 @@ Map<String, dynamic> _normalizeJsonIntegers(Map<String, dynamic> value) {
   return release;
 }
 
+/// Read the dependency member through the wire projection while retaining
+/// compatibility with the currently released pre-DAG Dart package. The current
+/// TJSV-admitted projection has a typed `dependencies` getter; the released
+/// projection does not. This bridge disappears once the package dependency is
+/// promoted and is not a separate wire authority.
+List<String> _assetDependencies(WasmAsset asset) {
+  try {
+    final dynamic raw = (asset as dynamic).dependencies;
+    if (raw == null) return const <String>[];
+    if (raw is! List || raw.any((value) => value is! String)) {
+      throw const LoaderException(
+          'manifest', 'Asset dependencies must be string identifiers');
+    }
+    return List<String>.unmodifiable(raw.cast<String>());
+  } on NoSuchMethodError {
+    return const <String>[];
+  }
+}
+
+/// Return a dependency-first, duplicate-free closure ending with [assetId].
+///
+/// This is consumer behavior over the TJSV-admitted wire projection, not a
+/// third contract authority.
+List<WasmAsset> dependencyClosure(WasmRelease release, String assetId) {
+  final assets = <String, WasmAsset>{
+    for (final asset in release.assets) asset.id: asset,
+  };
+  if (!assets.containsKey(assetId)) {
+    throw const LoaderException('asset', 'Unknown dependency root');
+  }
+  final visiting = <String>{};
+  final visited = <String>{};
+  final ordered = <WasmAsset>[];
+
+  void visit(String id) {
+    if (visited.contains(id)) return;
+    if (!visiting.add(id)) {
+      throw LoaderException(
+          'manifest', 'Asset dependency cycle encountered at `$id`');
+    }
+    final asset = assets[id];
+    if (asset == null) {
+      throw LoaderException(
+          'manifest', 'Dependency references missing asset `$id`');
+    }
+    for (final dependency in _assetDependencies(asset)) {
+      visit(dependency);
+    }
+    visiting.remove(id);
+    visited.add(id);
+    ordered.add(asset);
+  }
+
+  visit(assetId);
+  return List.unmodifiable(ordered);
+}
+
 WasmRelease parseRelease(Object? value, List<String> origins) {
   if (origins.isEmpty || origins.any((origin) => !_canonicalOrigin(origin))) {
     throw const LoaderException('origin', 'Canonical HTTPS origins required');
@@ -165,6 +222,29 @@ WasmRelease parseRelease(Object? value, List<String> origins) {
       throw const LoaderException('duplicate', 'Duplicate asset');
     }
   }
+
+  for (final asset in r.assets) {
+    final dependencies = <String>{};
+    for (final dependency in _assetDependencies(asset)) {
+      if (dependency == asset.id) {
+        throw LoaderException(
+            'manifest', 'Asset `${asset.id}` cannot depend on itself');
+      }
+      if (!ids.contains(dependency)) {
+        throw LoaderException('manifest',
+            'Asset `${asset.id}` depends on missing asset `$dependency`');
+      }
+      if (!dependencies.add(dependency)) {
+        throw LoaderException('manifest',
+            'Asset `${asset.id}` repeats dependency `$dependency`');
+      }
+    }
+  }
+  // Traversing every root proves the bounded admitted graph is acyclic.
+  for (final id in ids) {
+    dependencyClosure(r, id);
+  }
+
   final expected = switch (r.runtime) {
     'raw-wasm' => 'wasm',
     'wasm-bindgen' => 'module',
